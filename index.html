@@ -150,6 +150,16 @@
 			<option value="1">Full — 100%</option>
 		</select>
 		<p id="performanceAdvice">Auto selects a lower render scale on low-memory, dual-core devices.</p>
+		<label for="cpuFrameRateSelect">CPU frame limit</label>
+		<select id="cpuFrameRateSelect">
+			<option value="auto">Auto (20 FPS on low-end PCs)</option>
+			<option value="20">20 FPS — maximum CPU saving</option>
+			<option value="24">24 FPS — smoother</option>
+			<option value="30">30 FPS</option>
+			<option value="0">Browser refresh — uncapped</option>
+		</select>
+		<p id="cpuFrameAdvice">Auto limits low-end PCs to 20 frames per second to leave more CPU time for each frame.</p>
+
 	</div>
 </div>
 <script>
@@ -208,9 +218,28 @@
 		return mode === 'auto' ? getAutoRenderScale() : Math.max(0.5, Math.min(1, Number(mode) || 1));
 	}
 	var initialRenderScale = scaleForGraphicsMode(savedGraphicsMode);
+	function getAutoCPUFrameRate() {
+		var memory = Number(navigator.deviceMemory) || 4;
+		var cores = Number(navigator.hardwareConcurrency) || 2;
+		return memory <= 4 || cores <= 2 ? 20 : 30;
+	}
+	function getSavedCPUFrameRate() {
+		try {
+			var saved = localStorage.getItem('gta3web-cpu-frame-rate');
+			return saved === 'auto' || saved === '20' || saved === '24' || saved === '30' || saved === '0' ? saved : 'auto';
+		} catch (e) {
+			return 'auto';
+		}
+	}
+	var savedCPUFrameRate = getSavedCPUFrameRate();
+	function resolveCPUFrameRate(mode) {
+		return mode === 'auto' ? getAutoCPUFrameRate() : Math.max(0, Math.min(60, Number(mode) || 0));
+	}
+	var initialCPUFrameRate = resolveCPUFrameRate(savedCPUFrameRate);
 
 	var Module = {
 		renderScale: initialRenderScale,
+		cpuFrameRate: initialCPUFrameRate,
 		canvas: document.getElementById('canvas'),
 		print: function (s) { pushLog(s); console.log(s); },
 		printErr: function (s) { pushLog(s); console.error(s); },
@@ -233,6 +262,25 @@
 			});
 		}],
 	};
+
+	function applyCPUFrameRate(mode, save) {
+		var fps = resolveCPUFrameRate(mode);
+		Module.cpuFrameRate = fps;
+		if (typeof Module.setCpuFrameRate === 'function')
+			Module.setCpuFrameRate(fps);
+		var select = document.getElementById('cpuFrameRateSelect');
+		if (select) select.value = mode;
+		var advice = document.getElementById('cpuFrameAdvice');
+		if (advice) {
+			advice.textContent = fps > 0
+				? (mode === 'auto' ? 'Auto selected ' : 'Limited to ') + fps +
+					' FPS to reduce CPU load and give each frame more time.'
+				: 'The game follows browser refresh timing without an extra CPU frame cap.';
+		}
+		if (save) {
+			try { localStorage.setItem('gta3web-cpu-frame-rate', mode); } catch (e) {}
+		}
+	}
 
 	function applyRenderScale(mode, save) {
 		var scale = scaleForGraphicsMode(mode);
@@ -264,7 +312,8 @@
 		var toggle = document.getElementById('performanceToggle');
 		var panel = document.getElementById('performancePanel');
 		var select = document.getElementById('renderScaleSelect');
-		if (!toggle || !panel || !select) return;
+		var cpuSelect = document.getElementById('cpuFrameRateSelect');
+		if (!toggle || !panel || !select || !cpuSelect) return;
 		function setPanelVisible(visible) {
 			panel.hidden = !visible;
 			toggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
@@ -275,6 +324,9 @@
 		select.addEventListener('change', function () {
 			applyRenderScale(select.value, true);
 		});
+		cpuSelect.addEventListener('change', function () {
+			applyCPUFrameRate(cpuSelect.value, true);
+		});
 		window.addEventListener('keydown', function (event) {
 			if (event.key === 'F2') {
 				event.preventDefault();
@@ -282,6 +334,7 @@
 			}
 		});
 		applyRenderScale(savedGraphicsMode, false);
+		applyCPUFrameRate(savedCPUFrameRate, false);
 	})();
 
 	window.onerror = function (msg, source, lineno, colno, error) {
