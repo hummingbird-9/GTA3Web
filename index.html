@@ -86,6 +86,44 @@
 		font-size: 12px;
 		color: #888;
 	}
+
+	#performanceHud {
+		position: fixed;
+		top: 12px;
+		right: 12px;
+		z-index: 950;
+		color: #eee;
+		font: 12px/1.4 Consolas, Menlo, monospace;
+	}
+	#performanceToggle {
+		padding: 8px 11px;
+		border: 1px solid #555;
+		border-radius: 6px;
+		background: rgba(18, 18, 18, 0.92);
+		color: #eee;
+		cursor: pointer;
+	}
+	#performancePanel {
+		width: 220px;
+		margin-top: 6px;
+		padding: 12px;
+		border: 1px solid #555;
+		border-radius: 6px;
+		background: rgba(12, 12, 12, 0.96);
+		box-shadow: 0 5px 24px rgba(0, 0, 0, 0.45);
+	}
+	#performancePanel[hidden] { display: none; }
+	#performancePanel label { display: block; margin-bottom: 6px; color: #bbb; }
+	#performancePanel select {
+		width: 100%;
+		padding: 7px;
+		border: 1px solid #555;
+		border-radius: 4px;
+		background: #222;
+		color: #fff;
+	}
+	#performanceAdvice { margin: 8px 0 0; color: #aaa; font-size: 11px; }
+
 </style>
 </head>
 <body>
@@ -93,12 +131,26 @@
 <div id="loadingOverlay">
 	<div class="spinner"></div>
 	<div id="loadingStatus">Starting up...</div>
-	<div id="loadingHint">First load can take a few minutes (~860MB of game assets) - this is not frozen, keep this tab open.</div>
+	<div id="loadingHint">Downloading core game data and loading additional assets as needed. The first launch may take a while.</div>
 </div>
 <div id="crashOverlay">
 	<h1 id="crashTitle">The game has crashed</h1>
 	<p>Please screenshot or copy this and report it. Reload the page to try again.</p>
 	<pre id="crashDetail"></pre>
+</div>
+
+<div id="performanceHud">
+	<button id="performanceToggle" type="button" aria-expanded="false">Graphics (F2)</button>
+	<div id="performancePanel" hidden>
+		<label for="renderScaleSelect">Internal rendering resolution</label>
+		<select id="renderScaleSelect">
+			<option value="auto">Auto (recommended)</option>
+			<option value="0.5">Low — 50%</option>
+			<option value="0.75">Balanced — 75%</option>
+			<option value="1">Full — 100%</option>
+		</select>
+		<p id="performanceAdvice">Auto selects a lower render scale on low-memory, dual-core devices.</p>
+	</div>
 </div>
 <script>
 	// Distinguishes "still loading" from "crashed" - without this, a slow ~860MB asset
@@ -136,7 +188,29 @@
 		document.getElementById('crashOverlay').style.display = 'block';
 	}
 
+	function getAutoRenderScale() {
+		var memory = Number(navigator.deviceMemory) || 4;
+		var cores = Number(navigator.hardwareConcurrency) || 2;
+		if (memory <= 4 || cores <= 2) return 0.6;
+		if (memory <= 8 || cores <= 4) return 0.8;
+		return 1;
+	}
+	function getSavedGraphicsMode() {
+		try {
+			var saved = localStorage.getItem('gta3web-graphics-mode');
+			return saved === '0.5' || saved === '0.75' || saved === '1' || saved === 'auto' ? saved : 'auto';
+		} catch (e) {
+			return 'auto';
+		}
+	}
+	var savedGraphicsMode = getSavedGraphicsMode();
+	function scaleForGraphicsMode(mode) {
+		return mode === 'auto' ? getAutoRenderScale() : Math.max(0.5, Math.min(1, Number(mode) || 1));
+	}
+	var initialRenderScale = scaleForGraphicsMode(savedGraphicsMode);
+
 	var Module = {
+		renderScale: initialRenderScale,
 		canvas: document.getElementById('canvas'),
 		print: function (s) { pushLog(s); console.log(s); },
 		printErr: function (s) { pushLog(s); console.error(s); },
@@ -159,6 +233,56 @@
 			});
 		}],
 	};
+
+	function applyRenderScale(mode, save) {
+		var scale = scaleForGraphicsMode(mode);
+		Module.renderScale = scale;
+		var canvas = Module.canvas;
+		if (canvas && canvas.widthNative && canvas.heightNative) {
+			var renderWidth = Math.max(320, Math.round(canvas.widthNative * scale));
+			var renderHeight = Math.max(200, Math.round(canvas.heightNative * scale));
+			if (canvas.width !== renderWidth) canvas.width = renderWidth;
+			if (canvas.height !== renderHeight) canvas.height = renderHeight;
+			if (Module.ctx && typeof Module.ctx.viewport === 'function')
+				Module.ctx.viewport(0, 0, renderWidth, renderHeight);
+		}
+		var select = document.getElementById('renderScaleSelect');
+		if (select) select.value = mode;
+		var advice = document.getElementById('performanceAdvice');
+		if (advice) {
+			advice.textContent = mode === 'auto'
+				? 'Auto uses ' + Math.round(scale * 100) + '% on this device (' +
+					(Number(navigator.hardwareConcurrency) || '?') + ' logical cores, ' +
+					(Number(navigator.deviceMemory) || '?') + ' GB reported memory).'
+				: 'Rendering at ' + Math.round(scale * 100) + '% of the game resolution.';
+		}
+		if (save) {
+			try { localStorage.setItem('gta3web-graphics-mode', mode); } catch (e) {}
+		}
+	}
+	(function setupPerformanceControls() {
+		var toggle = document.getElementById('performanceToggle');
+		var panel = document.getElementById('performancePanel');
+		var select = document.getElementById('renderScaleSelect');
+		if (!toggle || !panel || !select) return;
+		function setPanelVisible(visible) {
+			panel.hidden = !visible;
+			toggle.setAttribute('aria-expanded', visible ? 'true' : 'false');
+		}
+		toggle.addEventListener('click', function () {
+			setPanelVisible(panel.hidden);
+		});
+		select.addEventListener('change', function () {
+			applyRenderScale(select.value, true);
+		});
+		window.addEventListener('keydown', function (event) {
+			if (event.key === 'F2') {
+				event.preventDefault();
+				setPanelVisible(panel.hidden);
+			}
+		});
+		applyRenderScale(savedGraphicsMode, false);
+	})();
 
 	window.onerror = function (msg, source, lineno, colno, error) {
 		showCrash('Uncaught error', msg + '\n  at ' + source + ':' + lineno + ':' + colno +
