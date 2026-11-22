@@ -153,8 +153,8 @@
 	</div>
 </div>
 <script>
-	// Distinguishes "still loading" from "crashed" - without this, a slow ~860MB asset
-	// preload and a silent crash looked identical to the user. Shown by default, hidden only
+	// Distinguishes "still loading" from "crashed" - without this, a slow split game-data
+	// download and a silent crash looked identical to the user. Shown by default, hidden only
 	// once the game reaches "Initialise: end" (see updateLoadingStatus below and Game.cpp's
 	// STEP macro). The crash overlay (above) takes over on top of this if something goes wrong
 	// mid-load instead of this ever silently disappearing.
