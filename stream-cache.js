@@ -1,8 +1,8 @@
 /* GTA III Web: persistent cache and startup prefetch for streamed game assets.
  *
- * The original engine requests TXDs, audio banks and IMG chunks through fetch().
- * Cache Storage keeps successful downloads between visits, while this file warms
- * the small/common assets before the loading overlay disappears.
+ * The engine requests TXDs, audio banks and IMG chunks through fetch().
+ * Cache Storage keeps successful downloads between visits. A small set of
+ * common assets is warmed during Emscripten preRun, before gameplay begins.
  */
 (() => {
     "use strict";
@@ -20,11 +20,11 @@
     let cacheBytes = null;
     let cacheWriteQueue = Promise.resolve();
 
-    function requestUrl(input) {
+    function requestUrl(input, init) {
         try {
             const raw = input instanceof Request ? input.url : String(input);
             const url = new URL(raw, document.baseURI);
-            const method = input instanceof Request ? input.method : "GET";
+            const method = init?.method || (input instanceof Request ? input.method : "GET");
             if (method.toUpperCase() !== "GET" || url.origin !== location.origin) return null;
 
             const path = url.pathname;
@@ -146,7 +146,7 @@
     }
 
     window.fetch = async function gta3CachedFetch(input, init) {
-        const url = requestUrl(input);
+        const url = requestUrl(input, init);
         if (!url) return nativeFetch(input, init);
 
         const isPrefetch = prefetchRequests.has(url);
@@ -209,7 +209,7 @@
         let next = 0;
         let completed = 0;
         let failed = 0;
-        const status = document.getElementById("loadingStatus");
+
         const worker = async () => {
             while (next < urls.length) {
                 const path = urls[next++];
@@ -222,45 +222,39 @@
                     console.warn("[stream-cache] Asset prefetch failed:", path, error);
                 } finally {
                     completed++;
-                    if (status) {
-                        status.textContent = "Preparing common assets (" + completed + "/" + urls.length + ")...";
+                    if (typeof Module?.setStatus === "function") {
+                        Module.setStatus("Preparing common assets (" + completed + "/" + urls.length + ")...");
                     }
                 }
             }
         };
 
         await Promise.all(Array.from({ length: Math.min(3, urls.length) }, worker));
+        // Ensure all Cache Storage writes finish before Emscripten starts main().
+        await cacheWriteQueue;
         console.info("[stream-cache] Common asset prefetch finished:", {
             total: urls.length,
             failed,
         });
     }
 
-    // Start warming only after the 100 MB base package has loaded and engine
-    // initialization begins. Keep the loading overlay up until common TXDs and
-    // small sound banks are cached, so they do not need to be fetched mid-game.
-    const originalUpdateLoadingStatus = window.updateLoadingStatus;
-    if (typeof originalUpdateLoadingStatus === "function") {
-        let warmPromise = null;
-        let finishWaiting = false;
+    // Emscripten waits for this run dependency before entering main(). This
+    // downloads all TXDs and small sound banks in advance, avoiding network
+    // waits for those frequently used assets during gameplay.
+    if (typeof Module !== "undefined") {
+        Module.preRun = Module.preRun || [];
+        Module.preRun.push(function gta3WarmStreamedAssets() {
+            if (!("caches" in window)) return;
 
-        window.updateLoadingStatus = function gta3UpdateLoadingStatus(message) {
-            if (!warmPromise && typeof message === "string" && /^Initialise:/i.test(message)) {
-                warmPromise = prefetchCommonAssets().catch((error) => {
-                    console.warn("[stream-cache] Startup prefetch skipped:", error);
-                });
-            }
-
-            if (message === "Initialise: end" && warmPromise && !finishWaiting) {
-                finishWaiting = true;
-                const status = document.getElementById("loadingStatus");
-                if (status) status.textContent = "Finishing asset preparation...";
-                warmPromise.then(() => originalUpdateLoadingStatus(message));
-                return;
-            }
-
-            originalUpdateLoadingStatus(message);
-        };
+            Module.addRunDependency("gta3-stream-cache-warmup");
+            Module.setStatus("Preparing streamed textures and audio...");
+            prefetchCommonAssets().catch((error) => {
+                console.warn("[stream-cache] Startup prefetch skipped:", error);
+            }).then(() => {
+                Module.removeRunDependency("gta3-stream-cache-warmup");
+                Module.setStatus("");
+            });
+        });
     }
 
     console.info("[stream-cache] Persistent asset cache enabled");
